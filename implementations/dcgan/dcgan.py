@@ -51,7 +51,7 @@ class Generator(nn.Module):
 
         self.conv_blocks = nn.Sequential(
             nn.BatchNorm2d(128),
-            nn.Upsample(scale_factor=2),
+            nn.Upsample(scale_factor=2), # 为啥Upsample和Conv2d不用一个ConvTranspose2d代替？
             nn.Conv2d(128, 128, 3, stride=1, padding=1),
             nn.BatchNorm2d(128, 0.8),
             nn.LeakyReLU(0.2, inplace=True),

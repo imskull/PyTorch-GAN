@@ -40,12 +40,13 @@ class Generator(nn.Module):
         super(Generator, self).__init__()
 
         def block(in_feat, out_feat, normalize=True):
-            layers = [nn.Linear(in_feat, out_feat)]
+            layers = [nn.Linear(in_feat, out_feat)] # 注意没用CNN
             if normalize:
                 layers.append(nn.BatchNorm1d(out_feat, 0.8))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            layers.append(nn.LeakyReLU(0.2, inplace=True)) # RELU放到BN后面
             return layers
 
+        # [FN, BN, Relu] ... FN, Tanh
         self.model = nn.Sequential(
             *block(opt.latent_dim, 128, normalize=False),
             *block(128, 256),
@@ -65,6 +66,7 @@ class Discriminator(nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
 
+        # [FN, Relu]... Sigmoid
         self.model = nn.Sequential(
             nn.Linear(int(np.prod(img_shape)), 512),
             nn.LeakyReLU(0.2, inplace=True),
@@ -82,7 +84,7 @@ class Discriminator(nn.Module):
 
 
 # Loss function
-adversarial_loss = torch.nn.BCELoss()
+adversarial_loss = torch.nn.BCELoss() # 二值交叉熵
 
 # Initialize generator and discriminator
 generator = Generator()
@@ -122,29 +124,22 @@ for epoch in range(opt.n_epochs):
     for i, (imgs, _) in enumerate(dataloader):
 
         # Adversarial ground truths
-        valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0), requires_grad=False)
+        valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0), requires_grad=False) # D设计为越真实越接近1，也就是“真实度”
         fake = Variable(Tensor(imgs.size(0), 1).fill_(0.0), requires_grad=False)
 
         # Configure input
         real_imgs = Variable(imgs.type(Tensor))
 
-        # -----------------
-        #  Train Generator
-        # -----------------
-
-        optimizer_G.zero_grad()
-
         # Sample noise as generator input
         z = Variable(Tensor(np.random.normal(0, 1, (imgs.shape[0], opt.latent_dim))))
 
         # Generate a batch of images
-        gen_imgs = generator(z)
+        gen_imgs = generator(z) # 产生的fake是从z这个噪音产生的, G(z)。
 
-        # Loss measures generator's ability to fool the discriminator
-        g_loss = adversarial_loss(discriminator(gen_imgs), valid)
-
-        g_loss.backward()
-        optimizer_G.step()
+        # Paper是先训练K次Discriminator然后再训练Generator。
+        # G和D训练比1:1是没问题的（https://arxiv.org/pdf/1701.00160.pdf）：
+        # "Many authors recommend running more steps of one player than the other, but as of late 2016, the author’s opinion is that
+        # the protocol that works the best in practice is simultaneous gradient descent, with one step for each player."
 
         # ---------------------
         #  Train Discriminator
@@ -155,10 +150,33 @@ for epoch in range(opt.n_epochs):
         # Measure discriminator's ability to classify real from generated samples
         real_loss = adversarial_loss(discriminator(real_imgs), valid)
         fake_loss = adversarial_loss(discriminator(gen_imgs.detach()), fake)
-        d_loss = (real_loss + fake_loss) / 2
+        d_loss = (real_loss + fake_loss) / 2 # NIPS 2016里面是对半分
+        # 把每个图片和噪音产生的fake都经过D处理后的分布做比较
 
         d_loss.backward()
         optimizer_D.step()
+
+
+        # -----------------
+        #  Train Generator
+        # -----------------
+
+        optimizer_G.zero_grad()
+
+        # Loss measures generator's ability to fool the discriminator
+
+        # S1: JS(Jensen-Shannon Divergence)散度
+        g_loss = adversarial_loss(discriminator(gen_imgs), valid) # 激励G要靠近1
+
+        # S2: Maximun likehood
+        # a = -torch.exp(1/torch.sigmoid(discriminator(gen_imgs)))/2.0
+        # g_loss = F.mse_loss(a, valid)
+
+
+        g_loss.backward()
+        optimizer_G.step() # 没有调用optimizer_D.step所以discriminator的weight不会变，也就是训练G的时候D恒定。
+
+        # G每轮训练使用了随机纯准正太分布(N(0,1))的噪音来产生Fake图片，
 
         print(
             "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
